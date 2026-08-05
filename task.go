@@ -44,13 +44,16 @@ type Task struct {
 	Tags    []string `json:"tags"`
 	Project string   `json:"project"`
 	// see const.go for PRIORITY_ strings
-	Priority    string    `json:"priority"`
-	DelegatedTo string    `json:"-"`
+	Priority string `json:"priority"`
+	// who is working on this task: set from DSTASK_IDENTITY on `start`,
+	// kept after stop/done as the last claimant for audit
+	DelegatedTo string    `json:"delegatedto,omitempty"`
 	Subtasks    []SubTask `json:"-"`
 	// uuids of tasks that this task depends on
-	// blocked status can be derived.
-	// TODO possible filter: :blocked. Also, :overdue
-	Dependencies []string `json:"-"`
+	Dependencies []string `json:"dependencies,omitempty"`
+	// derived at load time: true when any dependency is currently unresolved.
+	// Never persisted to the task file.
+	Blocked bool `json:"blocked,omitempty" yaml:"-"`
 
 	Created  time.Time `json:"created"`
 	Resolved time.Time `json:"resolved"`
@@ -197,6 +200,14 @@ func (t *Task) MatchesFilter(query Query) bool {
 	}
 
 	if query.Priority != "" && t.Priority != query.Priority {
+		return false
+	}
+
+	if query.Blocked && !t.Blocked {
+		return false
+	}
+
+	if query.Unblocked && t.Blocked {
 		return false
 	}
 

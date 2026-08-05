@@ -25,6 +25,9 @@ type Query struct {
 	Template      int
 	Text          string
 	IgnoreContext bool
+	// :blocked / :unblocked filters (derived from task dependencies)
+	Blocked   bool
+	Unblocked bool
 	// any words after the note operator: /
 	Note string
 }
@@ -68,6 +71,14 @@ func (query Query) String() string {
 
 	if query.Template > 0 {
 		args = append(args, fmt.Sprintf("template:%v", query.Template))
+	}
+
+	if query.Blocked {
+		args = append(args, ":blocked")
+	}
+
+	if query.Unblocked {
+		args = append(args, ":unblocked")
 	}
 
 	if query.Text != "" {
@@ -131,6 +142,10 @@ func ParseQuery(args ...string) Query {
 
 	var ignoreContext bool
 
+	var blocked bool
+
+	var unblocked bool
+
 	// something other than an ID has been parsed -- accept no more IDs
 	var IDsExhausted bool
 
@@ -160,6 +175,10 @@ func ParseQuery(args ...string) Query {
 
 		if item == IGNORE_CONTEXT_KEYWORD {
 			ignoreContext = true
+		} else if lcItem == ":blocked" {
+			blocked = true
+		} else if lcItem == ":unblocked" {
+			unblocked = true
 		} else if item == NOTE_MODE_KEYWORD {
 			notesModeActivated = true
 		} else if project == "" && strings.HasPrefix(lcItem, "project:") {
@@ -207,6 +226,8 @@ func ParseQuery(args ...string) Query {
 		Text:          strings.Join(words, " "),
 		Note:          strings.Join(notes, " "),
 		IgnoreContext: ignoreContext,
+		Blocked:       blocked,
+		Unblocked:     unblocked,
 	}
 }
 

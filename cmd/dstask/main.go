@@ -115,6 +115,16 @@ func main() {
 			dstask.ExitFail(err.Error())
 		}
 
+	case dstask.CMD_BLOCK_ON:
+		if err := dstask.CommandBlockOn(conf, ctx, query); err != nil {
+			dstask.ExitFail(err.Error())
+		}
+
+	case dstask.CMD_UNBLOCK:
+		if err := dstask.CommandUnblock(conf, ctx, query); err != nil {
+			dstask.ExitFail(err.Error())
+		}
+
 	case dstask.CMD_MODIFY:
 		if err := dstask.CommandModify(conf, ctx, query); err != nil {
 			dstask.ExitFail(err.Error())

@@ -103,6 +103,18 @@ func LoadTaskSet(repoPath, idsFilePath string, includeResolved bool) (*TaskSet, 
 		}
 	}
 
+	// derive blocked state: a task is blocked while any dependency is loaded
+	// and unresolved. Resolved (or absent) dependencies do not block.
+	for _, task := range ts.tasks {
+		for _, dep := range task.Dependencies {
+			if depTask := ts.tasksByUUID[dep]; depTask != nil && depTask.Status != STATUS_RESOLVED {
+				task.Blocked = true
+
+				break
+			}
+		}
+	}
+
 	// hide some tasks by default. This is useful for things like templates and
 	// recurring tasks which are shown either directly or with show- commands
 	for _, task := range ts.tasks {

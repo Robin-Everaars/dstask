@@ -41,6 +41,8 @@ const (
 	CMD_RESOLVE          = "resolve"
 	CMD_CONTEXT          = "context"
 	CMD_MODIFY           = "modify"
+	CMD_BLOCK_ON         = "block-on"
+	CMD_UNBLOCK          = "unblock"
 	CMD_EDIT             = "edit"
 	CMD_UNDO             = "undo"
 	CMD_SYNC             = "sync"
@@ -162,6 +164,8 @@ var ALL_CMDS = []string{
 	CMD_RESOLVE,
 	CMD_CONTEXT,
 	CMD_MODIFY,
+	CMD_BLOCK_ON,
+	CMD_UNBLOCK,
 	CMD_EDIT,
 	CMD_UNDO,
 	CMD_SYNC,

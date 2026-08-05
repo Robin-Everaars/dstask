@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	yaml "gopkg.in/yaml.v2"
@@ -573,6 +574,10 @@ func CommandStart(conf Config, ctx, query Query) error {
 			task := ts.MustGetByID(id)
 			task.Status = STATUS_ACTIVE
 
+			if identity := os.Getenv("DSTASK_IDENTITY"); identity != "" {
+				task.DelegatedTo = identity
+			}
+
 			if query.Text != "" {
 				task.Notes += "\n" + query.Text
 			}
@@ -597,6 +602,7 @@ func CommandStart(conf Config, ctx, query Query) error {
 			Project:      query.Project,
 			Priority:     query.Priority,
 			Notes:        query.Note,
+			DelegatedTo:  os.Getenv("DSTASK_IDENTITY"),
 		}
 		task = ts.MustLoadTask(task)
 		ts.SavePendingChanges()
@@ -710,4 +716,114 @@ func CommandVersion() {
 		GIT_COMMIT,
 		BUILD_DATE,
 	)
+}
+
+// resolveDependencyRefs maps block-on/unblock argument references (numeric ids
+// beyond the first, plus UUID-shaped words) onto dependency task UUIDs.
+func resolveDependencyRefs(ts *TaskSet, query Query) ([]string, error) {
+	var uuids []string
+
+	for _, id := range query.IDs[1:] {
+		task, err := ts.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+
+		uuids = append(uuids, task.UUID)
+	}
+
+	for _, word := range strings.Fields(query.Text) {
+		if !IsValidUUID4String(word) {
+			return nil, fmt.Errorf("dependency reference is neither a task ID nor a UUID: %s", word)
+		}
+
+		if ts.tasksByUUID[word] == nil {
+			return nil, fmt.Errorf("dependency UUID does not match any known task: %s", word)
+		}
+
+		uuids = append(uuids, word)
+	}
+
+	return uuids, nil
+}
+
+// CommandBlockOn records dependencies on the target task: the first ID is the
+// target, every further ID or UUID is a dependency it becomes blocked on.
+func CommandBlockOn(conf Config, ctx, query Query) error {
+	if len(query.IDs) == 0 {
+		return errors.New("no target task ID specified")
+	}
+
+	// resolved dependencies must be addressable, so load everything
+	ts, err := LoadTaskSet(conf.Repo, conf.IDsFile, true)
+	if err != nil {
+		return err
+	}
+
+	task := ts.MustGetByID(query.IDs[0])
+
+	deps, err := resolveDependencyRefs(ts, query)
+	if err != nil {
+		return err
+	}
+
+	if len(deps) == 0 {
+		return errors.New("no dependency references specified")
+	}
+
+	for _, dep := range deps {
+		if dep == task.UUID {
+			return errors.New("a task cannot block on itself")
+		}
+
+		if !StrSliceContains(task.Dependencies, dep) {
+			task.Dependencies = append(task.Dependencies, dep)
+		}
+	}
+
+	ts.MustUpdateTask(task)
+	ts.SavePendingChanges()
+	MustGitCommit(conf.Repo, "Blocked %s", task)
+
+	return nil
+}
+
+// CommandUnblock removes the referenced dependencies from the target task, or
+// all of them when no reference is given.
+func CommandUnblock(conf Config, ctx, query Query) error {
+	if len(query.IDs) == 0 {
+		return errors.New("no target task ID specified")
+	}
+
+	ts, err := LoadTaskSet(conf.Repo, conf.IDsFile, true)
+	if err != nil {
+		return err
+	}
+
+	task := ts.MustGetByID(query.IDs[0])
+
+	deps, err := resolveDependencyRefs(ts, query)
+	if err != nil {
+		return err
+	}
+
+	if len(deps) == 0 {
+		task.Dependencies = nil
+	} else {
+		var kept []string
+
+		for _, existing := range task.Dependencies {
+			if !StrSliceContains(deps, existing) {
+				kept = append(kept, existing)
+			}
+		}
+
+		task.Dependencies = kept
+	}
+
+	ts.MustUpdateTask(task)
+	ts.SavePendingChanges()
+	MustGitCommit(conf.Repo, "Unblocked %s", task)
+
+	return nil
 }
