@@ -103,14 +103,38 @@ func CommandContext(conf Config, state State, ctx, query Query) error {
 	return nil
 }
 
+// uuidMutationTarget resolves one open UUID subject directly from the task set
+// and removes it from query text, avoiding the concurrency-unstable numeric ID.
+func uuidMutationTarget(ts *TaskSet, query Query) (Task, Query, bool, error) {
+	target, remainder, _ := strings.Cut(query.Text, " ")
+	if !IsValidUUID4String(target) {
+		return Task{}, query, false, nil
+	}
+	task := ts.tasksByUUID[target]
+	if task == nil || task.Status == STATUS_RESOLVED {
+		return Task{}, query, true, fmt.Errorf("no open task with UUID %s exists", target)
+	}
+	query.Text = remainder
+	return *task, query, true, nil
+}
+
+// normalizeMutationText moves text after the literal-note separator into the
+// mutation text field. Mixing text before and after the separator is ambiguous.
+func normalizeMutationText(query Query) (Query, error) {
+	if query.Note == "" {
+		return query, nil
+	}
+	if query.Text != "" {
+		return query, errors.New("mutation text cannot appear both before and after /")
+	}
+	query.Text = query.Note
+	return query, nil
+}
+
 // CommandDone marks a task as done.
 func CommandDone(conf Config, ctx, query Query) error {
 	if query.HasOperators() {
 		return errors.New("operators not valid in this context")
-	}
-
-	if len(query.IDs) == 0 {
-		return errors.New("no ID(s) specified")
 	}
 
 	ts, err := LoadTaskSet(conf.Repo, conf.IDsFile, false)
@@ -118,10 +142,29 @@ func CommandDone(conf Config, ctx, query Query) error {
 		return err
 	}
 
-	// iterate over IDs instead of filtering; it's clearer and enables us to
-	// test each ID exists, and ignore context/operators
-	for _, id := range query.IDs {
-		task := ts.MustGetByID(id)
+	var tasks []Task
+	if len(query.IDs) > 0 {
+		for _, id := range query.IDs {
+			tasks = append(tasks, ts.MustGetByID(id))
+		}
+	} else {
+		var found bool
+		var task Task
+		task, query, found, err = uuidMutationTarget(ts, query)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("no ID(s) or UUID specified")
+		}
+		tasks = append(tasks, task)
+	}
+
+	query, err = normalizeMutationText(query)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
 		task.Status = STATUS_RESOLVED
 		task.Resolved = time.Now()
 
@@ -290,10 +333,6 @@ func CommandNext(conf Config, ctx, query Query) error {
 
 // CommandNote edits or prints the markdown note associated with the task.
 func CommandNote(conf Config, ctx, query Query) error {
-	if len(query.IDs) == 0 {
-		return errors.New("no ID(s) specified")
-	}
-
 	if query.HasOperators() {
 		return errors.New("operators not valid in this context")
 	}
@@ -303,8 +342,29 @@ func CommandNote(conf Config, ctx, query Query) error {
 		return err
 	}
 
-	for _, id := range query.IDs {
-		task := ts.MustGetByID(id)
+	var tasks []Task
+	if len(query.IDs) > 0 {
+		for _, id := range query.IDs {
+			tasks = append(tasks, ts.MustGetByID(id))
+		}
+	} else {
+		var found bool
+		var task Task
+		task, query, found, err = uuidMutationTarget(ts, query)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("no ID(s) or UUID specified")
+		}
+		tasks = append(tasks, task)
+	}
+
+	query, err = normalizeMutationText(query)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
 		// If stdout is a TTY, we may open the editor
 		if StdoutIsTTY() {
 			if query.Text == "" {
@@ -568,10 +628,25 @@ func CommandStart(conf Config, ctx, query Query) error {
 		return errors.New("templates not yet supported for start command")
 	}
 
-	if len(query.IDs) > 0 {
-		// start given tasks by IDs
-		for _, id := range query.IDs {
-			task := ts.MustGetByID(id)
+	uuidTask := Task{}
+	uuidTarget := false
+	if len(query.IDs) == 0 {
+		uuidTask, query, uuidTarget, err = uuidMutationTarget(ts, query)
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(query.IDs) > 0 || uuidTarget {
+		var tasks []Task
+		if uuidTarget {
+			tasks = append(tasks, uuidTask)
+		} else {
+			for _, id := range query.IDs {
+				tasks = append(tasks, ts.MustGetByID(id))
+			}
+		}
+		for _, task := range tasks {
 			task.Status = STATUS_ACTIVE
 
 			if identity := os.Getenv("DSTASK_IDENTITY"); identity != "" {
@@ -625,12 +700,25 @@ func CommandStop(conf Config, ctx, query Query) error {
 		return errors.New("operators not valid in this context")
 	}
 
-	if len(query.IDs) == 0 {
-		return errors.New("no ID(s) specified")
+	var tasks []Task
+	if len(query.IDs) > 0 {
+		for _, id := range query.IDs {
+			tasks = append(tasks, ts.MustGetByID(id))
+		}
+	} else {
+		var found bool
+		var task Task
+		task, query, found, err = uuidMutationTarget(ts, query)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return errors.New("no ID(s) or UUID specified")
+		}
+		tasks = append(tasks, task)
 	}
 
-	for _, id := range query.IDs {
-		task := ts.MustGetByID(id)
+	for _, task := range tasks {
 		task.Status = STATUS_PAUSED
 
 		if query.Text != "" {
@@ -723,7 +811,11 @@ func CommandVersion() {
 func resolveDependencyRefs(ts *TaskSet, query Query) ([]string, error) {
 	var uuids []string
 
-	for _, id := range query.IDs[1:] {
+	dependencyIDStart := 0
+	if len(query.IDs) > 0 {
+		dependencyIDStart = 1
+	}
+	for _, id := range query.IDs[dependencyIDStart:] {
 		task, err := ts.GetByID(id)
 		if err != nil {
 			return nil, err
@@ -733,6 +825,14 @@ func resolveDependencyRefs(ts *TaskSet, query Query) ([]string, error) {
 	}
 
 	for _, word := range strings.Fields(query.Text) {
+		if id, err := strconv.Atoi(word); err == nil {
+			task, err := ts.GetByID(id)
+			if err != nil {
+				return nil, err
+			}
+			uuids = append(uuids, task.UUID)
+			continue
+		}
 		if !IsValidUUID4String(word) {
 			return nil, fmt.Errorf("dependency reference is neither a task ID nor a UUID: %s", word)
 		}
@@ -747,20 +847,37 @@ func resolveDependencyRefs(ts *TaskSet, query Query) ([]string, error) {
 	return uuids, nil
 }
 
-// CommandBlockOn records dependencies on the target task: the first ID is the
-// target, every further ID or UUID is a dependency it becomes blocked on.
-func CommandBlockOn(conf Config, ctx, query Query) error {
-	if len(query.IDs) == 0 {
-		return errors.New("no target task ID specified")
+// dependencyTarget resolves the mutation subject without converting a UUID to
+// the concurrency-unstable numeric ID. A UUID subject is the first text word;
+// numeric subject IDs retain the original query representation.
+func dependencyTarget(ts *TaskSet, query Query) (Task, Query, error) {
+	if len(query.IDs) > 0 {
+		return ts.MustGetByID(query.IDs[0]), query, nil
 	}
 
+	task, query, found, err := uuidMutationTarget(ts, query)
+	if err != nil {
+		return Task{}, query, err
+	}
+	if !found {
+		return Task{}, query, errors.New("no target task ID or UUID specified")
+	}
+	return task, query, nil
+}
+
+// CommandBlockOn records dependencies on the target task: the first ID or UUID
+// is the target, every further ID or UUID is a dependency it becomes blocked on.
+func CommandBlockOn(conf Config, ctx, query Query) error {
 	// resolved dependencies must be addressable, so load everything
 	ts, err := LoadTaskSet(conf.Repo, conf.IDsFile, true)
 	if err != nil {
 		return err
 	}
 
-	task := ts.MustGetByID(query.IDs[0])
+	task, query, err := dependencyTarget(ts, query)
+	if err != nil {
+		return err
+	}
 
 	deps, err := resolveDependencyRefs(ts, query)
 	if err != nil {
@@ -791,16 +908,15 @@ func CommandBlockOn(conf Config, ctx, query Query) error {
 // CommandUnblock removes the referenced dependencies from the target task, or
 // all of them when no reference is given.
 func CommandUnblock(conf Config, ctx, query Query) error {
-	if len(query.IDs) == 0 {
-		return errors.New("no target task ID specified")
-	}
-
 	ts, err := LoadTaskSet(conf.Repo, conf.IDsFile, true)
 	if err != nil {
 		return err
 	}
 
-	task := ts.MustGetByID(query.IDs[0])
+	task, query, err := dependencyTarget(ts, query)
+	if err != nil {
+		return err
+	}
 
 	deps, err := resolveDependencyRefs(ts, query)
 	if err != nil {

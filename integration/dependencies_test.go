@@ -121,6 +121,159 @@ func TestBlockOnByUUIDAndUnblock(t *testing.T) {
 	assert.Equal(t, false, tasks[1].Blocked)
 }
 
+func TestDependencyTargetAcceptsStableUUID(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "decide granularity")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("add", "design layout")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	decideUUID := tasks[0].UUID
+	designUUID := tasks[1].UUID
+
+	output, exiterr, success = program(designUUID, "block-on", decideUUID)
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks = unmarshalTaskArray(t, output)
+	assert.DeepEqual(t, []string{decideUUID}, tasks[1].Dependencies)
+
+	output, exiterr, success = program(designUUID, "unblock", decideUUID)
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks = unmarshalTaskArray(t, output)
+	assert.Equal(t, 0, len(tasks[1].Dependencies))
+}
+
+func TestMutationTargetAcceptsStableUUID(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "stable mutation subject")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	taskUUID := unmarshalTaskArray(t, output)[0].UUID
+
+	output, exiterr, success = program(taskUUID, "start")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-active")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	assert.Equal(t, taskUUID, tasks[0].UUID)
+
+	output, exiterr, success = program(taskUUID, "stop")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-paused")
+	assertProgramResult(t, output, exiterr, success)
+	tasks = unmarshalTaskArray(t, output)
+	assert.Equal(t, taskUUID, tasks[0].UUID)
+	output, exiterr, success = program(taskUUID, "start")
+	assertProgramResult(t, output, exiterr, success)
+
+	output, exiterr, success = program(taskUUID, "done", "closed through UUID")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-resolved")
+	assertProgramResult(t, output, exiterr, success)
+	tasks = unmarshalTaskArray(t, output)
+	assert.Equal(t, taskUUID, tasks[0].UUID)
+	assert.Equal(t, "\nclosed through UUID", tasks[0].Notes)
+}
+
+func TestUUIDMutationTargetPreservesTrailingText(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "preserve mutation text")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	taskUUID := unmarshalTaskArray(t, output)[0].UUID
+	note := "closed   through\nUUID"
+
+	output, exiterr, success = program(taskUUID, "done", note)
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-resolved")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	assert.Equal(t, "\n"+note, tasks[0].Notes)
+}
+
+func TestUUIDMutationTargetPreservesOperatorLikeText(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "preserve operator-like text")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	taskUUID := unmarshalTaskArray(t, output)[0].UUID
+	note := "project:literal +tag 123"
+
+	output, exiterr, success = program(taskUUID, "done", "/", note)
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-resolved")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	assert.Equal(t, "\n"+note, tasks[0].Notes)
+}
+
+func TestUUIDNotePreservesOperatorLikeText(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "preserve literal note text")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	taskUUID := unmarshalTaskArray(t, output)[0].UUID
+	note := "project:literal +tag 123"
+	unsetFakePTY := setEnv("DSTASK_FAKE_PTY", "1")
+	unsetEditor := setEnv("EDITOR", "true")
+
+	output, exiterr, success = program(taskUUID, "note", "/", note)
+	unsetEditor()
+	unsetFakePTY()
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	assert.Equal(t, note, tasks[0].Notes)
+}
+
+func TestUUIDDependencyTargetAcceptsNumericDependency(t *testing.T) {
+	repo, cleanup := makeDstaskRepo(t)
+	defer cleanup()
+
+	program := testCmd(repo)
+	output, exiterr, success := program("add", "dependency")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("add", "target")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks := unmarshalTaskArray(t, output)
+	dependencyUUID := tasks[0].UUID
+	targetUUID := tasks[1].UUID
+
+	output, exiterr, success = program(targetUUID, "block-on", "1")
+	assertProgramResult(t, output, exiterr, success)
+	output, exiterr, success = program("show-open")
+	assertProgramResult(t, output, exiterr, success)
+	tasks = unmarshalTaskArray(t, output)
+	assert.DeepEqual(t, []string{dependencyUUID}, tasks[1].Dependencies)
+}
+
 func TestStartCapturesClaimIdentity(t *testing.T) {
 	repo, cleanup := makeDstaskRepo(t)
 	defer cleanup()
