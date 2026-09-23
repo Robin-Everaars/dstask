@@ -242,13 +242,16 @@ any words after.
 Available commands:
 
 next              : Show most important tasks (priority, creation date -- truncated and default)
+show-next         : Alias for next
 add               : Add a task
 template          : Add a task template
 log               : Log a task (already resolved)
 start             : Change task status to active
 note              : Append to or edit note for a task
+notes             : Alias for note
 stop              : Change task status to pending
 done              : Resolve a task
+resolve           : Alias for done
 context           : Set global context for task list and new tasks (use "none" to set no context)
 modify            : Change task attributes specified on command line
 block-on          : Make the first task depend on the listed tasks (IDs or UUIDs)
@@ -259,6 +262,7 @@ sync              : Pull then push to git repository, automatic merge commit.
 open              : Open all URLs found in summary/annotations
 git               : Pass a command to git in the repository. Used for push/pull.
 remove            : Remove a task (use to remove tasks added by mistake)
+rm                : Alias for remove
 show-projects     : List projects with completion status
 show-tags         : List tags in use
 show-active       : Show tasks that have been started
