@@ -251,6 +251,8 @@ stop              : Change task status to pending
 done              : Resolve a task
 context           : Set global context for task list and new tasks (use "none" to set no context)
 modify            : Change task attributes specified on command line
+block-on          : Make the first task depend on the listed tasks (IDs or UUIDs)
+unblock           : Drop the listed dependencies, or all of them, from the first task
 edit              : Edit task with text editor
 undo              : Undo last n commits
 sync              : Pull then push to git repository, automatic merge commit.
