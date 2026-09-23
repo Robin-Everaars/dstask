@@ -277,11 +277,30 @@ func CommandModify(conf Config, ctx, query Query) error {
 	}
 
 	if len(query.IDs) == 0 {
+		task, rest, found, err := uuidMutationTarget(ts, query)
+		if err != nil {
+			return err
+		}
+		if found {
+			task.Modify(rest)
+			ts.MustUpdateTask(task)
+			ts.SavePendingChanges()
+			MustGitCommit(conf.Repo, "Modified %s", task)
+			return nil
+		}
+
 		ts.Filter(ctx)
 
+		// Without a terminal nobody can answer the confirmation, and every
+		// task in the context would be rewritten silently.
 		if StdoutIsTTY() {
 			ConfirmOrAbort(
 				"no IDs specified. Apply to all %d tasks in current ctx?",
+				len(ts.Tasks()),
+			)
+		} else if os.Getenv("DSTASK_ALLOW_BULK_MODIFY") != "1" {
+			return fmt.Errorf(
+				"no ID or UUID specified: refusing to modify all %d tasks in the current context without a terminal; name the task, or set DSTASK_ALLOW_BULK_MODIFY=1",
 				len(ts.Tasks()),
 			)
 		}
